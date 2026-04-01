@@ -51,7 +51,8 @@ class Authenticator(dns_common.DNSAuthenticator):
             {
                 "access_key_id": "阿里云 AccessKey ID",
                 "access_key_secret": "阿里云 AccessKey Secret",
-                "region_id": "阿里云地域ID (可选，默认为cn-hangzhou)"
+                "region_id": "阿里云地域ID (可选，默认为cn-hangzhou)",
+                "site_id": "ESA站点ID (可选)"  # 添加site_id到凭证配置
             }
         )
 
@@ -80,12 +81,21 @@ class Authenticator(dns_common.DNSAuthenticator):
         if not self.credentials:
             raise errors.Error("凭证未配置")
 
-        access_key_id: str = self.credentials.conf("access_key_id") or ""
-        access_key_secret: str = self.credentials.conf("access_key_secret") or ""
+        # 从凭证文件读取配置
+        access_key_id = self.credentials.conf("access_key_id")
+        access_key_secret = self.credentials.conf("access_key_secret")
         region_id = self.credentials.conf("region_id") or "cn-hangzhou"
         
-        # 获取站点ID（从命令行参数或自动查找）
-        site_id = self.conf("site-id")
+        # 优先从凭证文件读取site_id，然后从命令行参数
+        site_id = self.credentials.conf("site_id") or self.conf("site-id")
+        
+        # 验证必要的凭证
+        if not access_key_id:
+            raise errors.PluginError("凭证文件中缺少 access_key_id")
+        if not access_key_secret:
+            raise errors.PluginError("凭证文件中缺少 access_key_secret")
+        
+        logger.debug(f"使用配置: region={region_id}, site_id={site_id or '自动查找'}")
         
         return _AliCloudESAHelper(
             access_key_id=access_key_id,
@@ -116,7 +126,7 @@ class _AliCloudESAHelper:
         
         # 如果没有提供site_id，尝试自动查找
         if not self.site_id:
-            logger.warning("未提供站点ID，将尝试自动查找")
+            logger.info("未提供站点ID，将尝试自动查找")
 
     def _ensure_site_id(self, domain: str) -> str:
         """确保有站点ID，如果没有则尝试查找"""
@@ -125,6 +135,8 @@ class _AliCloudESAHelper:
         
         # 尝试根据域名查找站点
         root_domain = self._get_root_domain(domain)
+        logger.info(f"尝试查找域名 {root_domain} 对应的ESA站点...")
+        
         site = self.client.find_site_by_domain(root_domain)
         
         if not site:
@@ -132,10 +144,17 @@ class _AliCloudESAHelper:
             parts = root_domain.split('.')
             if len(parts) > 2:
                 parent_domain = '.'.join(parts[1:])
+                logger.info(f"尝试查找父域名 {parent_domain}...")
                 site = self.client.find_site_by_domain(parent_domain)
         
         if not site:
-            raise errors.PluginError(f"未找到域名 {domain} 对应的ESA站点，请手动指定站点ID")
+            raise errors.PluginError(
+                f"未找到域名 {domain} 对应的ESA站点。\n"
+                f"请确保：\n"
+                f"1. 域名已在阿里云ESA中配置站点\n"
+                f"2. 或手动指定站点ID：--dns-aliyun-esa-site-id YOUR_SITE_ID\n"
+                f"3. 或在凭证文件中配置 site_id"
+            )
         
         self.site_id = site["site_id"]
         logger.info(f"找到站点: {site['site_name']} (ID: {self.site_id})")
@@ -148,7 +167,7 @@ class _AliCloudESAHelper:
         :param record_name: 记录名称
         :param record_content: 记录内容
         """
-        logger.debug(f"添加ESA TXT记录: {record_name} -> {record_content}")
+        logger.info(f"添加ESA TXT记录: {record_name} -> {record_content}")
 
         try:
             # 获取站点ID
@@ -158,14 +177,15 @@ class _AliCloudESAHelper:
             existing_records = self.client.get_site_records(site_id, record_name, "TXT")
             for record in existing_records:
                 # 检查记录值是否匹配
-                # 注意：ESA中TXT记录的值可能在data字段中
                 record_value = self._extract_txt_value(record)
+                logger.debug(f"检查现有记录: {record_name} = {record_value}")
                 if record_value == record_content:
                     logger.info(f"TXT记录已存在: {record_name}")
                     self._record_ids[record_name] = record["record_id"]
                     return
 
             # 添加新记录
+            logger.info(f"正在添加新的TXT记录到站点 {site_id}...")
             record_id = self.client.add_txt_record(
                 site_id=site_id,
                 record_name=record_name,
@@ -174,9 +194,10 @@ class _AliCloudESAHelper:
                 comment="Certbot DNS-01 challenge"
             )
             self._record_ids[record_name] = record_id
+            logger.info(f"TXT记录添加成功，记录ID: {record_id}")
 
             # 等待DNS传播
-            logger.info(f"等待DNS记录传播...")
+            logger.info("等待DNS记录传播...")
             time.sleep(10)
 
         except Exception as e:
@@ -190,7 +211,7 @@ class _AliCloudESAHelper:
         :param record_name: 记录名称
         :param record_content: 记录内容
         """
-        logger.debug(f"删除ESA TXT记录: {record_name}")
+        logger.info(f"删除ESA TXT记录: {record_name}")
 
         try:
             # 获取站点ID
@@ -199,19 +220,30 @@ class _AliCloudESAHelper:
             # 使用存储的记录ID删除
             if record_name in self._record_ids:
                 record_id = self._record_ids[record_name]
+                logger.info(f"使用缓存的记录ID删除: {record_id}")
                 self.client.delete_record(record_id)
                 del self._record_ids[record_name]
+                logger.info(f"记录删除成功")
                 return
 
             # 如果没有存储的记录ID，尝试查找并删除
+            logger.info(f"查找要删除的记录: {record_name}")
             existing_records = self.client.get_site_records(site_id, record_name, "TXT")
+            
+            deleted = False
             for record in existing_records:
                 record_value = self._extract_txt_value(record)
+                logger.debug(f"检查记录: {record['record_id']} = {record_value}")
                 if record_value == record_content:
+                    logger.info(f"删除记录: {record['record_id']}")
                     self.client.delete_record(record["record_id"])
+                    deleted = True
                     break
-            else:
+            
+            if not deleted:
                 logger.warning(f"未找到要删除的ESA TXT记录: {record_name}")
+            else:
+                logger.info(f"记录删除成功")
 
         except Exception as e:
             logger.error(f"删除ESA TXT记录失败: {e}")
@@ -220,27 +252,40 @@ class _AliCloudESAHelper:
 
     def _extract_txt_value(self, record: dict) -> str:
         """从ESA记录中提取TXT值"""
-        # ESA中TXT记录的值可能在data字段中
+        logger.debug(f"提取TXT值，记录结构: {record}")
+        
+        # 首先检查是否有直接的value字段
+        if "value" in record and record["value"]:
+            return str(record["value"])
+        
+        # 检查data字段
         if "data" in record and record["data"]:
-            # 根据ESA API的实际结构调整
-            if isinstance(record["data"], dict):
-                # 尝试从data字典中提取值
-                if "value" in record["data"]:
-                    return record["data"]["value"]
-                elif "txt" in record["data"]:
-                    return record["data"]["txt"]
-                elif "data" in record["data"]:
-                    return record["data"]["data"]
+            data = record["data"]
+            
+            # 如果data是字符串，直接返回
+            if isinstance(data, str):
+                return data
+            
+            # 如果data是字典，尝试不同的键
+            if isinstance(data, dict):
+                # 尝试常见的键名
+                for key in ["value", "txt", "data", "content", "text"]:
+                    if key in data and data[key]:
+                        return str(data[key])
+                
+                # 如果字典有值，尝试第一个值
+                if data:
+                    first_value = list(data.values())[0]
+                    if first_value:
+                        return str(first_value)
         
-        # 如果data字段是字符串，直接返回
-        if isinstance(record["data"], str):
-            return record["data"]
+        # 检查其他可能的字段
+        for field in ["content", "txt", "text", "record_value"]:
+            if field in record and record[field]:
+                return str(record[field])
         
-        # 如果data字段不存在，尝试其他字段
-        if "value" in record:
-            return record["value"]
-        
-        # 最后返回空字符串
+        # 最后尝试整个记录转换为字符串
+        logger.warning(f"无法从记录中提取TXT值，记录: {record}")
         return ""
 
     @staticmethod
