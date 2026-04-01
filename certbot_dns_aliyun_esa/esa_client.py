@@ -32,6 +32,8 @@ class AliCloudESAClient:
         # ESA没有多区域endpoint，固定使用 cn-hangzhou
         config.endpoint = "esa.cn-hangzhou.aliyuncs.com"
         self.client = ESA20240910Client(config)
+        # 单例化RuntimeOptions，避免重复创建
+        self.runtime = util_models.RuntimeOptions()
 
     def get_site_records(self, site_id: int, record_name: str | None = None, record_type: str = "TXT", page_number: int = 1, page_size: int = 100, search_mode: str = "exact", accelerate: bool = False) -> List[Dict[str, Any]]:
         """
@@ -59,33 +61,32 @@ class AliCloudESAClient:
                     record_match_type=search_mode,
                     proxied=accelerate,
                 )
-                runtime = util_models.RuntimeOptions()
-                response = self.client.list_records_with_options(request, runtime)
+                response = self.client.list_records_with_options(request, self.runtime)
 
-                body = getattr(response, "body", None) if response is not None else None
-                list_records = getattr(body, "records", None) if body is not None else None
+                body: esa20240910_models.ListRecordsResponseBody = getattr(response, "body", None) if response is not None else None
+                list_records: List[esa20240910_models.ListRecordsResponseBodyRecords] = getattr(body, "records", None) if body is not None else None
                 if not list_records:
                     break
 
                 for record in list_records:
                     records.append({
-                        "record_id": record.get("record_id") if isinstance(record, dict) else getattr(record, "record_id", None),
-                        "record_name": record.get("record_name") if isinstance(record, dict) else getattr(record, "record_name", None),
-                        "type": record.get("type") if isinstance(record, dict) else getattr(record, "type", None),
-                        "data": record.get("data") if isinstance(record, dict) else getattr(record, "data", None),
-                        "ttl": record.get("ttl") if isinstance(record, dict) else getattr(record, "ttl", None),
-                        "comment": record.get("comment") if isinstance(record, dict) else getattr(record, "comment", None),
-                        "status": record.get("status") if isinstance(record, dict) else getattr(record, "status", None),
+                        "record_id": record.record_id,
+                        "record_name": record.record_name,
+                        "type": record.type,
+                        "data": record.data,
+                        "ttl": record.ttl,
+                        "comment": record.comment,
+                        "status": record.status,
                     })
 
-                total_count = getattr(body, "total_count", None) or getattr(body, "totalRecords", None) or 0
+                total_count = body.total_count if body is not None else 0
                 if len(records) >= total_count or len(list_records) < page_size:
                     break
 
                 current_page += 1
 
             if record_name and search_mode == "exact":
-                records = [r for r in records if r.get("record_name") == record_name]
+                records = [r for r in records if r["record_name"] == record_name]
 
             return records
         except Exception as e:
@@ -112,13 +113,10 @@ class AliCloudESAClient:
                 comment=comment,
                 data=esa20240910_models.CreateRecordRequestData(value=value),
             )
-            runtime = util_models.RuntimeOptions()
-            response = self.client.create_record_with_options(request, runtime)
+            response = self.client.create_record_with_options(request, self.runtime)
 
-            body = getattr(response, "body", None)
-            record_id = None
-            if body is not None:
-                record_id = getattr(body, "record_id", None) or getattr(body, "recordId", None)
+            body: esa20240910_models.CreateRecordResponseBody = getattr(response, "body", None)
+            record_id = body.record_id if body is not None else None
 
             if not record_id:
                 raise Exception("添加记录失败，未返回记录ID")
@@ -138,8 +136,7 @@ class AliCloudESAClient:
         """
         try:
             request = esa20240910_models.DeleteRecordRequest(record_id=record_id)
-            runtime = util_models.RuntimeOptions()
-            self.client.delete_record_with_options(request, runtime)
+            self.client.delete_record_with_options(request, self.runtime)
             logger.info(f"成功删除ESA记录: {record_id}")
             return True
         except Exception as e:
@@ -163,8 +160,7 @@ class AliCloudESAClient:
                 ttl=ttl,
                 comment=comment,
             )
-            runtime = util_models.RuntimeOptions()
-            self.client.update_record_with_options(request, runtime)
+            self.client.update_record_with_options(request, self.runtime)
             logger.info(f"成功更新ESA记录: {record_id}")
             return True
         except Exception as e:
@@ -190,30 +186,20 @@ class AliCloudESAClient:
                 page_size=page_size,
                 order_by=sort_by,
             )
-            runtime = util_models.RuntimeOptions()
-            response = self.client.list_sites_with_options(request, runtime)
+            response = self.client.list_sites_with_options(request, self.runtime)
 
-            body = getattr(response, "body", None)
-            sites_data = getattr(body, "sites", []) if body is not None else []
+            body: esa20240910_models.ListSitesResponseBody = getattr(response, "body", None)
+            sites_data: List[esa20240910_models.ListSitesResponseBodySites] = getattr(body, "sites", []) if body is not None else []
 
             sites = []
             for site in sites_data:
-                if isinstance(site, dict):
-                    sites.append({
-                        "site_id": site.get("site_id") or site.get("siteId"),
-                        "site_name": site.get("site_name") or site.get("siteName"),
-                        "status": site.get("status"),
-                        "coverage": site.get("coverage"),
-                        "access_type": site.get("access_type") or site.get("accessType"),
-                    })
-                else:
-                    sites.append({
-                        "site_id": getattr(site, "site_id", None) or getattr(site, "siteId", None),
-                        "site_name": getattr(site, "site_name", None) or getattr(site, "siteName", None),
-                        "status": getattr(site, "status", None),
-                        "coverage": getattr(site, "coverage", None),
-                        "access_type": getattr(site, "access_type", None) or getattr(site, "accessType", None),
-                    })
+                sites.append({
+                    "site_id": site.site_id,
+                    "site_name": site.site_name,
+                    "status": site.status,
+                    "coverage": site.coverage,
+                    "access_type": site.access_type,
+                })
             return sites
         except Exception as e:
             logger.error(f"获取站点列表失败: {e}")
@@ -228,29 +214,19 @@ class AliCloudESAClient:
         """
         try:
             request = esa20240910_models.GetSiteRequest(site_id=site_id)
-            runtime = util_models.RuntimeOptions()
-            response = self.client.get_site_with_options(request, runtime)
+            response = self.client.get_site_with_options(request, self.runtime)
 
-            body = getattr(response, "body", None)
-            site = getattr(body, "site", None) if body is not None else None
+            body: esa20240910_models.GetSiteResponseBody = getattr(response, "body", None)
+            site: esa20240910_models.GetSiteResponseBodySiteModel = getattr(body, "site_model", None) if body is not None else None
             if not site:
                 raise Exception(f"未找到站点ID: {site_id}")
 
-            if isinstance(site, dict):
-                return {
-                    "site_id": site.get("site_id") or site.get("siteId"),
-                    "site_name": site.get("site_name") or site.get("siteName"),
-                    "status": site.get("status"),
-                    "coverage": site.get("coverage"),
-                    "access_type": site.get("access_type") or site.get("accessType"),
-                }
-
             return {
-                "site_id": getattr(site, "site_id", None) or getattr(site, "siteId", None),
-                "site_name": getattr(site, "site_name", None) or getattr(site, "siteName", None),
-                "status": getattr(site, "status", None),
-                "coverage": getattr(site, "coverage", None),
-                "access_type": getattr(site, "access_type", None) or getattr(site, "accessType", None),
+                "site_id": site.site_id,
+                "site_name": site.site_name,
+                "status": site.status,
+                "coverage": site.coverage,
+                "access_type": site.access_type,
             }
         except Exception as e:
             logger.error(f"获取站点失败: {e}")
