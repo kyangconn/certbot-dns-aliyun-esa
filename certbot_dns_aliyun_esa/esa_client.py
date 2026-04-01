@@ -1,6 +1,7 @@
 """
 阿里云ESA API客户端
 """
+
 from __future__ import annotations
 
 import logging
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 class AliCloudESAClient:
     """阿里云ESA客户端"""
 
-    def __init__(self, access_key_id: str, access_key_secret: str, region_id: str = "cn-hangzhou"):
+    def __init__(self, access_key_id: str, access_key_secret: str):
         """
         初始化阿里云ESA客户端
 
@@ -35,17 +36,24 @@ class AliCloudESAClient:
         # 单例化RuntimeOptions，避免重复创建
         self.runtime = util_models.RuntimeOptions()
 
-    def get_site_records(self, site_id: int, record_name: str | None = None, record_type: str = "TXT", page_number: int = 1, page_size: int = 100, search_mode: str = "exact", accelerate: bool = False) -> List[Dict[str, Any]]:
+    def get_site_records(
+        self,
+        site_id: int,
+        record_name: str | None = None,
+        record_type: str = "TXT",
+        page_number: int = 1,
+        page_size: int = 10,
+        proxied: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         获取站点记录
 
         :param site_id: 站点ID
-        :param record_name: 记录名称（可选）
-        :param record_type: 记录类型
+        :param record_name: 记录名称（域名）
+        :param record_type: 记录类型（TXT)
         :param page_number: 分页页码
         :param page_size: 分页大小
-        :param search_mode: 匹配模式（exact/like）
-        :param accelerate: 是否代理加速
+        :param proxied: 是否代理加速
         :return: 记录列表
         """
         try:
@@ -58,34 +66,34 @@ class AliCloudESAClient:
                     type=record_type,
                     page_number=current_page,
                     page_size=page_size,
-                    record_match_type=search_mode,
-                    proxied=accelerate,
+                    proxied=proxied,
                 )
                 response = self.client.list_records_with_options(request, self.runtime)
 
-                body: esa20240910_models.ListRecordsResponseBody = getattr(response, "body", None) if response is not None else None
-                list_records: List[esa20240910_models.ListRecordsResponseBodyRecords] = getattr(body, "records", None) if body is not None else None
+                body = response.body
+                list_records = body.records
                 if not list_records:
                     break
 
                 for record in list_records:
-                    records.append({
-                        "record_id": record.record_id,
-                        "record_name": record.record_name,
-                        "type": record.type,
-                        "data": record.data,
-                        "ttl": record.ttl,
-                        "comment": record.comment,
-                        "status": record.status,
-                    })
+                    records.append(
+                        {
+                            "record_id": record.record_id,
+                            "record_name": record.record_name,
+                            "type": record.record_type,
+                            "data": record.data,
+                            "ttl": record.ttl,
+                            "comment": record.comment,
+                        }
+                    )
 
-                total_count = body.total_count if body is not None else 0
+                total_count = body.total_count
                 if len(records) >= total_count or len(list_records) < page_size:
                     break
 
                 current_page += 1
 
-            if record_name and search_mode == "exact":
+            if record_name:
                 records = [r for r in records if r["record_name"] == record_name]
 
             return records
@@ -93,7 +101,14 @@ class AliCloudESAClient:
             logger.error(f"获取站点记录失败: {e}")
             raise
 
-    def add_txt_record(self, site_id: int, record_name: str, value: str, ttl: int = 600, comment: str = "Certbot DNS-01 challenge") -> str:
+    def add_txt_record(
+        self,
+        site_id: int,
+        record_name: str,
+        value: str,
+        ttl: int = 600,
+        comment: str = "Certbot DNS-01 challenge",
+    ) -> str:
         """
         添加TXT记录
 
@@ -115,8 +130,7 @@ class AliCloudESAClient:
             )
             response = self.client.create_record_with_options(request, self.runtime)
 
-            body: esa20240910_models.CreateRecordResponseBody = getattr(response, "body", None)
-            record_id = body.record_id if body is not None else None
+            record_id = response.body.record_id
 
             if not record_id:
                 raise Exception("添加记录失败，未返回记录ID")
@@ -143,7 +157,9 @@ class AliCloudESAClient:
             logger.error(f"删除ESA记录失败: {e}")
             raise
 
-    def update_record(self, record_id: int, value: str, ttl: int, comment: str | None = None) -> bool:
+    def update_record(
+        self, record_id: int, value: str, ttl: int, comment: str | None = None
+    ) -> bool:
         """
         更新记录
 
@@ -167,7 +183,14 @@ class AliCloudESAClient:
             logger.error(f"更新ESA记录失败: {e}")
             raise
 
-    def get_sites(self, name: str | None = None, search_mode: str = "exact", page_number: int = 1, page_size: int = 50, sort_by: str | None = None) -> List[Dict[str, Any]]:
+    def get_sites(
+        self,
+        name: str | None = None,
+        search_mode: str = "exact",
+        page_number: int = 1,
+        page_size: int = 50,
+        sort_by: str | None = None,
+    ) -> List[Dict[str, Any]]:
         """
         获取站点列表
 
@@ -188,18 +211,19 @@ class AliCloudESAClient:
             )
             response = self.client.list_sites_with_options(request, self.runtime)
 
-            body: esa20240910_models.ListSitesResponseBody = getattr(response, "body", None)
-            sites_data: List[esa20240910_models.ListSitesResponseBodySites] = getattr(body, "sites", []) if body is not None else []
+            sites_data = response.body.sites
 
             sites = []
             for site in sites_data:
-                sites.append({
-                    "site_id": site.site_id,
-                    "site_name": site.site_name,
-                    "status": site.status,
-                    "coverage": site.coverage,
-                    "access_type": site.access_type,
-                })
+                sites.append(
+                    {
+                        "site_id": site.site_id,
+                        "site_name": site.site_name,
+                        "status": site.status,
+                        "coverage": site.coverage,
+                        "access_type": site.access_type,
+                    }
+                )
             return sites
         except Exception as e:
             logger.error(f"获取站点列表失败: {e}")
@@ -216,8 +240,8 @@ class AliCloudESAClient:
             request = esa20240910_models.GetSiteRequest(site_id=site_id)
             response = self.client.get_site_with_options(request, self.runtime)
 
-            body: esa20240910_models.GetSiteResponseBody = getattr(response, "body", None)
-            site: esa20240910_models.GetSiteResponseBodySiteModel = getattr(body, "site_model", None) if body is not None else None
+            site = response.body.site_model
+
             if not site:
                 raise Exception(f"未找到站点ID: {site_id}")
 
