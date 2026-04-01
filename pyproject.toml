@@ -1,3 +1,8 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
 [project]
 name = "certbot-dns-aliyun-esa"
 version = "0.1.0"
@@ -10,3 +15,12 @@ dependencies = [
     "zope.interface>=6.0",
     "setuptools>=65.5.0"
 ]
+
+
+[project.entry-points."certbot.plugins"]
+dns-aliyun-esa = "certbot_dns_aliyun_esa:Authenticator"
+
+
+[tool.setuptools]
+packages = ["certbot_dns_aliyun_esa"]
+include-package-data = true

@@ -304,7 +304,7 @@ wheels = [
 [[package]]
 name = "certbot-dns-aliyun-esa"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "alibabacloud-esa20240910" },
     { name = "certbot" },
