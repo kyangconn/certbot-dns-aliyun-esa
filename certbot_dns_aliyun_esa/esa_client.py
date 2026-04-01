@@ -141,7 +141,7 @@ class AliCloudESAClient:
             logger.error(f"添加ESA TXT记录失败: {e}")
             raise
 
-    def delete_record(self, record_id: str) -> bool:
+    def delete_record(self, record_id: int) -> bool:
         """
         删除记录
 

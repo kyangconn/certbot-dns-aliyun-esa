@@ -287,6 +287,20 @@ class _AliCloudESAHelper:
                     if first_value:
                         return str(first_value)
 
+            # 如果data是对象（模型），尝试常见属性
+            # 例如: alibabacloud_esa20240910.models._list_records_response_body.ListRecordsResponseBodyRecordsData
+            if not isinstance(data, (str, dict)):
+                for attr in ["value", "txt", "data", "content", "text"]:
+                    attr_value = getattr(data, attr, None)
+                    if attr_value:
+                        return str(attr_value)
+
+                # 进一步尝试 __dict__（兼容部分对象）
+                if hasattr(data, "__dict__"):
+                    for key, val in data.__dict__.items():
+                        if val:
+                            return str(val)
+
         # 检查其他可能的字段
         for field in ["content", "txt", "text", "record_value"]:
             if field in record and record[field]:
