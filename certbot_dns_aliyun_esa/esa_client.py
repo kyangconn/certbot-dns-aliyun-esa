@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 from alibabacloud_esa20240910 import models as esa20240910_models
 from alibabacloud_esa20240910.client import Client as ESA20240910Client
 from alibabacloud_tea_openapi import models as open_api_models
-from alibabacloud_credentials.client import Client as CredentialsClient
+from alibabacloud_tea_util import models as util_models
 
 logger = logging.getLogger(__name__)
 
@@ -25,60 +25,74 @@ class AliCloudESAClient:
         :param access_key_secret: 阿里云AccessKey Secret
         :param region_id: 地域ID，默认为cn-hangzhou
         """
-        self.access_key_id = access_key_id
-        self.access_key_secret = access_key_secret
-        self.region_id = region_id
-        self.client = self._create_client()
-
-    def _create_client(self) -> ESA20240910Client:
-        """创建阿里云ESA客户端"""
         config = open_api_models.Config(
-            access_key_id=self.access_key_id,
-            access_key_secret=self.access_key_secret,
-            region_id=self.region_id
+            access_key_id=access_key_id,
+            access_key_secret=access_key_secret,
         )
-        # ESA的endpoint
-        config.endpoint = f"esa.{self.region_id}.aliyuncs.com"
-        return ESA20240910Client(config)
+        # ESA没有多区域endpoint，固定使用 cn-hangzhou
+        config.endpoint = "esa.cn-hangzhou.aliyuncs.com"
+        self.client = ESA20240910Client(config)
 
-    def get_site_records(self, site_id: str, record_name: str | None = None, record_type: str = "TXT") -> List[Dict[str, Any]]:
+    def get_site_records(self, site_id: int, record_name: str | None = None, record_type: str = "TXT", page_number: int = 1, page_size: int = 100, search_mode: str = "exact", accelerate: bool = False) -> List[Dict[str, Any]]:
         """
         获取站点记录
 
         :param site_id: 站点ID
         :param record_name: 记录名称（可选）
         :param record_type: 记录类型
+        :param page_number: 分页页码
+        :param page_size: 分页大小
+        :param search_mode: 匹配模式（exact/like）
+        :param accelerate: 是否代理加速
         :return: 记录列表
         """
         try:
-            request = esa20240910_models.ListRecordsRequest(
-                site_id=site_id,  # type: ignore
-                type=record_type
-            )
-            response = self.client.list_records(request)
-
             records = []
-            if response.body and response.body.records:
-                for record in response.body.records:
-                    # 如果指定了record_name，只返回匹配的记录
-                    if record_name and record.record_name != record_name:
-                        continue
-                    
+            current_page = page_number
+            while True:
+                request = esa20240910_models.ListRecordsRequest(
+                    site_id=site_id,
+                    record_name=record_name,
+                    type=record_type,
+                    page_number=current_page,
+                    page_size=page_size,
+                    record_match_type=search_mode,
+                    proxied=accelerate,
+                )
+                runtime = util_models.RuntimeOptions()
+                response = self.client.list_records_with_options(request, runtime)
+
+                body = getattr(response, "body", None) if response is not None else None
+                list_records = getattr(body, "records", None) if body is not None else None
+                if not list_records:
+                    break
+
+                for record in list_records:
                     records.append({
-                        "record_id": record.record_id,
-                        "record_name": record.record_name,
-                        "type": record.type,  # type: ignore
-                        "data": record.data,
-                        "ttl": record.ttl,
-                        "comment": record.comment,
-                        "status": record.status  # type: ignore
+                        "record_id": record.get("record_id") if isinstance(record, dict) else getattr(record, "record_id", None),
+                        "record_name": record.get("record_name") if isinstance(record, dict) else getattr(record, "record_name", None),
+                        "type": record.get("type") if isinstance(record, dict) else getattr(record, "type", None),
+                        "data": record.get("data") if isinstance(record, dict) else getattr(record, "data", None),
+                        "ttl": record.get("ttl") if isinstance(record, dict) else getattr(record, "ttl", None),
+                        "comment": record.get("comment") if isinstance(record, dict) else getattr(record, "comment", None),
+                        "status": record.get("status") if isinstance(record, dict) else getattr(record, "status", None),
                     })
+
+                total_count = getattr(body, "total_count", None) or getattr(body, "totalRecords", None) or 0
+                if len(records) >= total_count or len(list_records) < page_size:
+                    break
+
+                current_page += 1
+
+            if record_name and search_mode == "exact":
+                records = [r for r in records if r.get("record_name") == record_name]
+
             return records
         except Exception as e:
             logger.error(f"获取站点记录失败: {e}")
             raise
 
-    def add_txt_record(self, site_id: str, record_name: str, value: str, ttl: int = 600, comment: str = "Certbot DNS-01 challenge") -> str:
+    def add_txt_record(self, site_id: int, record_name: str, value: str, ttl: int = 600, comment: str = "Certbot DNS-01 challenge") -> str:
         """
         添加TXT记录
 
@@ -90,73 +104,29 @@ class AliCloudESAClient:
         :return: 记录ID
         """
         try:
-            # 对于TXT记录，data字段需要特殊处理
-            # 根据ESA文档，TXT记录的数据格式可能不同
-            # 这里假设TXT记录的数据直接放在value字段中
             request = esa20240910_models.CreateRecordRequest(
-                site_id=site_id,  # type: ignore
+                site_id=site_id,
                 record_name=record_name,
                 type="TXT",
                 ttl=ttl,
                 comment=comment,
-                # 对于TXT记录，可能需要不同的data结构
-                # 这里需要根据实际的ESA API文档调整
-                data=esa20240910_models.CreateRecordRequestData(
-                    # 根据示例代码，TXT记录可能需要特定的data结构
-                    # 这里先使用一个简单的结构
-                    value=value  # type: ignore
-                )
+                data=esa20240910_models.CreateRecordRequestData(value=value),
             )
-            
-            response = self.client.create_record(request)
+            runtime = util_models.RuntimeOptions()
+            response = self.client.create_record_with_options(request, runtime)
 
-            if response.body and response.body.record_id:
-                logger.info(f"成功添加ESA TXT记录: {record_name} -> {value}")
-                return str(response.body.record_id)  # type: ignore
-            else:
+            body = getattr(response, "body", None)
+            record_id = None
+            if body is not None:
+                record_id = getattr(body, "record_id", None) or getattr(body, "recordId", None)
+
+            if not record_id:
                 raise Exception("添加记录失败，未返回记录ID")
+
+            logger.info(f"成功添加ESA TXT记录: {record_name} -> {value}")
+            return str(record_id)
         except Exception as e:
             logger.error(f"添加ESA TXT记录失败: {e}")
-            # 尝试使用更通用的方法
-            return self._add_record_generic(site_id, record_name, "TXT", value, ttl, comment)
-
-    def _add_record_generic(self, site_id: str, record_name: str, record_type: str, value: str, ttl: int = 600, comment: str = "") -> str:
-        """
-        通用方法添加记录（备用方法）
-        """
-        try:
-            # 尝试不同的data结构
-            request = esa20240910_models.CreateRecordRequest(
-                site_id=site_id,  # type: ignore
-                record_name=record_name,
-                type=record_type,
-                ttl=ttl,
-                comment=comment
-            )
-            
-            # 根据记录类型设置不同的data
-            if record_type == "TXT":
-                # TXT记录可能只需要简单的value
-                # 这里尝试不设置data字段
-                pass
-            elif record_type == "CNAME":
-                request.data = esa20240910_models.CreateRecordRequestData(
-                    cname=value  # type: ignore
-                )
-            elif record_type == "A":
-                request.data = esa20240910_models.CreateRecordRequestData(
-                    address=value  # type: ignore
-                )
-            
-            response = self.client.create_record(request)
-            
-            if response.body and response.body.record_id:
-                logger.info(f"成功添加ESA {record_type}记录: {record_name} -> {value}")
-                return str(response.body.record_id)  # type: ignore
-            else:
-                raise Exception("添加记录失败，未返回记录ID")
-        except Exception as e:
-            logger.error(f"通用方法添加记录失败: {e}")
             raise
 
     def delete_record(self, record_id: str) -> bool:
@@ -167,75 +137,123 @@ class AliCloudESAClient:
         :return: 是否成功
         """
         try:
-            request = esa20240910_models.DeleteRecordRequest(
-                record_id=record_id  # type: ignore
-            )
-            response = self.client.delete_record(request)
-
+            request = esa20240910_models.DeleteRecordRequest(record_id=record_id)
+            runtime = util_models.RuntimeOptions()
+            self.client.delete_record_with_options(request, runtime)
             logger.info(f"成功删除ESA记录: {record_id}")
             return True
         except Exception as e:
             logger.error(f"删除ESA记录失败: {e}")
             raise
 
-    def update_record(self, record_id: str, record_name: str, record_type: str, value: str, ttl: int = 600, comment: str = "") -> bool:
+    def update_record(self, record_id: int, value: str, ttl: int, comment: str | None = None) -> bool:
         """
         更新记录
 
         :param record_id: 记录ID
-        :param record_name: 记录名称
-        :param record_type: 记录类型
         :param value: 记录值
-        :param ttl: TTL值
-        :param comment: 备注
+        :param ttl: TTL值（可选）
+        :param comment: 备注（可选）
         :return: 是否成功
         """
         try:
             request = esa20240910_models.UpdateRecordRequest(
-                record_id=record_id,  # type: ignore
-                record_name=record_name,  # type: ignore
-                type=record_type,
+                record_id=record_id,
+                data=esa20240910_models.UpdateRecordRequestData(value=value),
                 ttl=ttl,
-                comment=comment
+                comment=comment,
             )
-            
-            # 根据记录类型设置data
-            if record_type == "TXT":
-                request.data = esa20240910_models.UpdateRecordRequestData(
-                    value=value  # type: ignore
-                )
-            
-            response = self.client.update_record(request)
-
+            runtime = util_models.RuntimeOptions()
+            self.client.update_record_with_options(request, runtime)
             logger.info(f"成功更新ESA记录: {record_id}")
             return True
         except Exception as e:
             logger.error(f"更新ESA记录失败: {e}")
             raise
 
-    def get_sites(self) -> List[Dict[str, Any]]:
+    def get_sites(self, name: str | None = None, search_mode: str = "exact", page_number: int = 1, page_size: int = 50, sort_by: str | None = None) -> List[Dict[str, Any]]:
         """
-        获取所有站点
+        获取站点列表
 
+        :param name: 站点名称搜索条件（可选）
+        :param search_mode: 搜索模式（exact/like）
+        :param page_number: 分页页码
+        :param page_size: 分页大小
+        :param sort_by: 排序字段
         :return: 站点列表
         """
         try:
-            request = esa20240910_models.ListSitesRequest()
-            response = self.client.list_sites(request)
+            request = esa20240910_models.ListSitesRequest(
+                site_name=name,
+                site_search_type=search_mode,
+                page_number=page_number,
+                page_size=page_size,
+                order_by=sort_by,
+            )
+            runtime = util_models.RuntimeOptions()
+            response = self.client.list_sites_with_options(request, runtime)
+
+            body = getattr(response, "body", None)
+            sites_data = getattr(body, "sites", []) if body is not None else []
 
             sites = []
-            if response.body and response.body.sites:
-                for site in response.body.sites:
+            for site in sites_data:
+                if isinstance(site, dict):
                     sites.append({
-                        "site_id": site.site_id,
-                        "site_name": site.site_name,
-                        "status": site.status,
-                        "coverage": site.coverage,
-                        "access_type": site.access_type
+                        "site_id": site.get("site_id") or site.get("siteId"),
+                        "site_name": site.get("site_name") or site.get("siteName"),
+                        "status": site.get("status"),
+                        "coverage": site.get("coverage"),
+                        "access_type": site.get("access_type") or site.get("accessType"),
+                    })
+                else:
+                    sites.append({
+                        "site_id": getattr(site, "site_id", None) or getattr(site, "siteId", None),
+                        "site_name": getattr(site, "site_name", None) or getattr(site, "siteName", None),
+                        "status": getattr(site, "status", None),
+                        "coverage": getattr(site, "coverage", None),
+                        "access_type": getattr(site, "access_type", None) or getattr(site, "accessType", None),
                     })
             return sites
         except Exception as e:
             logger.error(f"获取站点列表失败: {e}")
+            raise
+
+    def get_site(self, site_id: int) -> Dict[str, Any]:
+        """
+        根据站点ID获取站点信息
+
+        :param site_id: 站点ID
+        :return: 站点信息
+        """
+        try:
+            request = esa20240910_models.GetSiteRequest(site_id=site_id)
+            runtime = util_models.RuntimeOptions()
+            response = self.client.get_site_with_options(request, runtime)
+
+            body = getattr(response, "body", None)
+            site = getattr(body, "site", None) if body is not None else None
+            if not site:
+                raise Exception(f"未找到站点ID: {site_id}")
+
+            if isinstance(site, dict):
+                return {
+                    "site_id": site.get("site_id") or site.get("siteId"),
+                    "site_name": site.get("site_name") or site.get("siteName"),
+                    "status": site.get("status"),
+                    "coverage": site.get("coverage"),
+                    "access_type": site.get("access_type") or site.get("accessType"),
+                }
+
+            return {
+                "site_id": getattr(site, "site_id", None) or getattr(site, "siteId", None),
+                "site_name": getattr(site, "site_name", None) or getattr(site, "siteName", None),
+                "status": getattr(site, "status", None),
+                "coverage": getattr(site, "coverage", None),
+                "access_type": getattr(site, "access_type", None) or getattr(site, "accessType", None),
+            }
+        except Exception as e:
+            logger.error(f"获取站点失败: {e}")
             raise
 
     def find_site_by_domain(self, domain: str) -> Dict[str, Any] | None:

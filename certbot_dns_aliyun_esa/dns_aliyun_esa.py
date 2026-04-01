@@ -1,6 +1,7 @@
 """
 阿里云ESA DNS认证器插件
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,7 +30,9 @@ class Authenticator(dns_common.DNSAuthenticator):
         self.credentials: dns_common.CredentialsConfiguration | None = None
 
     @classmethod
-    def add_parser_arguments(cls, add: Callable[..., None], default_propagation_seconds: int = 30) -> None:
+    def add_parser_arguments(
+        cls, add: Callable[..., None], default_propagation_seconds: int = 30
+    ) -> None:
         """添加命令行参数"""
         super().add_parser_arguments(add, default_propagation_seconds)
         add("credentials", help="阿里云API凭证文件路径")
@@ -49,11 +52,10 @@ class Authenticator(dns_common.DNSAuthenticator):
             "credentials",
             "阿里云API凭证文件路径",
             {
-                "access_key_id": "阿里云 AccessKey ID",
-                "access_key_secret": "阿里云 AccessKey Secret",
-                "region_id": "阿里云地域ID (可选，默认为cn-hangzhou)",
-                "site_id": "ESA站点ID (可选)"  # 添加site_id到凭证配置
-            }
+                "access_key_id": "dns_aliyun_esa_access_id",
+                "access_key_secret": "dns_aliyun_esa_access_secret",
+                "site_id": "dns_aliyun_esa_site_id",
+            },
         )
 
     def _perform(self, domain: str, validation_name: str, validation: str) -> None:
@@ -84,69 +86,75 @@ class Authenticator(dns_common.DNSAuthenticator):
         # 从凭证文件读取配置
         access_key_id = self.credentials.conf("access_key_id")
         access_key_secret = self.credentials.conf("access_key_secret")
-        region_id = self.credentials.conf("region_id") or "cn-hangzhou"
-        
-        # 优先从凭证文件读取site_id，然后从命令行参数
-        site_id = self.credentials.conf("site_id") or self.conf("site-id")
-        
+        site_id = self.credentials.conf("site_id")
+
         # 验证必要的凭证
         if not access_key_id:
             raise errors.PluginError("凭证文件中缺少 access_key_id")
         if not access_key_secret:
             raise errors.PluginError("凭证文件中缺少 access_key_secret")
-        
-        logger.debug(f"使用配置: region={region_id}, site_id={site_id or '自动查找'}")
-        
+        if site_id:
+            try:
+                site_id = int(site_id)
+            except ValueError:
+                raise errors.PluginError(f"无效的ESA站点ID: {site_id}，必须是整数")
+
+        logger.debug(f"使用配置: site_id={site_id or '自动查找'}")
+
         return _AliCloudESAHelper(
             access_key_id=access_key_id,
             access_key_secret=access_key_secret,
-            region_id=region_id,
             site_id=site_id,
-            ttl=self.ttl
+            ttl=self.ttl,
         )
 
 
 class _AliCloudESAHelper:
     """阿里云ESA辅助类"""
 
-    def __init__(self, access_key_id: str, access_key_secret: str, region_id: str, site_id: str | None = None, ttl: int = 600):
+    def __init__(
+        self, access_key_id: str, access_key_secret: str, site_id: int, ttl: int = 600
+    ):
         """
         初始化ESA辅助类
 
         :param access_key_id: 阿里云AccessKey ID
         :param access_key_secret: 阿里云AccessKey Secret
-        :param region_id: 地域ID
         :param site_id: ESA站点ID（可选）
         :param ttl: DNS记录TTL
         """
-        self.client = AliCloudESAClient(access_key_id, access_key_secret, region_id)
+        self.client = AliCloudESAClient(access_key_id, access_key_secret)
         self.ttl = ttl
-        self.site_id = site_id
+        self.site_id: int = site_id
         self._record_ids = {}  # 存储添加的记录ID，用于清理
-        
-        # 如果没有提供site_id，尝试自动查找
-        if not self.site_id:
-            logger.info("未提供站点ID，将尝试自动查找")
 
-    def _ensure_site_id(self, domain: str) -> str:
+    def _ensure_site_id(self, domain: str) -> int:
         """确保有站点ID，如果没有则尝试查找"""
         if self.site_id:
-            return self.site_id
-        
+            # 已有 site_id 时优先调用 GetSite 验证
+            try:
+                site = self.client.get_site(self.site_id)
+                self.site_id = site["site_id"]
+                return self.site_id
+            except Exception as e:
+                raise errors.PluginError(
+                    f"无效的ESA站点ID: {self.site_id}，GetSite失败: {e}"
+                )
+
         # 尝试根据域名查找站点
         root_domain = self._get_root_domain(domain)
         logger.info(f"尝试查找域名 {root_domain} 对应的ESA站点...")
-        
+
         site = self.client.find_site_by_domain(root_domain)
-        
+
         if not site:
             # 尝试查找父域名
-            parts = root_domain.split('.')
+            parts = root_domain.split(".")
             if len(parts) > 2:
-                parent_domain = '.'.join(parts[1:])
+                parent_domain = ".".join(parts[1:])
                 logger.info(f"尝试查找父域名 {parent_domain}...")
                 site = self.client.find_site_by_domain(parent_domain)
-        
+
         if not site:
             raise errors.PluginError(
                 f"未找到域名 {domain} 对应的ESA站点。\n"
@@ -155,7 +163,7 @@ class _AliCloudESAHelper:
                 f"2. 或手动指定站点ID：--dns-aliyun-esa-site-id YOUR_SITE_ID\n"
                 f"3. 或在凭证文件中配置 site_id"
             )
-        
+
         self.site_id = site["site_id"]
         logger.info(f"找到站点: {site['site_name']} (ID: {self.site_id})")
         return self.site_id
@@ -172,7 +180,7 @@ class _AliCloudESAHelper:
         try:
             # 获取站点ID
             site_id = self._ensure_site_id(record_name)
-            
+
             # 检查是否已存在相同的记录
             existing_records = self.client.get_site_records(site_id, record_name, "TXT")
             for record in existing_records:
@@ -191,7 +199,7 @@ class _AliCloudESAHelper:
                 record_name=record_name,
                 value=record_content,
                 ttl=self.ttl,
-                comment="Certbot DNS-01 challenge"
+                comment="Certbot DNS-01 challenge",
             )
             self._record_ids[record_name] = record_id
             logger.info(f"TXT记录添加成功，记录ID: {record_id}")
@@ -216,7 +224,7 @@ class _AliCloudESAHelper:
         try:
             # 获取站点ID
             site_id = self._ensure_site_id(record_name)
-            
+
             # 使用存储的记录ID删除
             if record_name in self._record_ids:
                 record_id = self._record_ids[record_name]
@@ -229,7 +237,7 @@ class _AliCloudESAHelper:
             # 如果没有存储的记录ID，尝试查找并删除
             logger.info(f"查找要删除的记录: {record_name}")
             existing_records = self.client.get_site_records(site_id, record_name, "TXT")
-            
+
             deleted = False
             for record in existing_records:
                 record_value = self._extract_txt_value(record)
@@ -239,7 +247,7 @@ class _AliCloudESAHelper:
                     self.client.delete_record(record["record_id"])
                     deleted = True
                     break
-            
+
             if not deleted:
                 logger.warning(f"未找到要删除的ESA TXT记录: {record_name}")
             else:
@@ -253,37 +261,37 @@ class _AliCloudESAHelper:
     def _extract_txt_value(self, record: dict) -> str:
         """从ESA记录中提取TXT值"""
         logger.debug(f"提取TXT值，记录结构: {record}")
-        
+
         # 首先检查是否有直接的value字段
         if "value" in record and record["value"]:
             return str(record["value"])
-        
+
         # 检查data字段
         if "data" in record and record["data"]:
             data = record["data"]
-            
+
             # 如果data是字符串，直接返回
             if isinstance(data, str):
                 return data
-            
+
             # 如果data是字典，尝试不同的键
             if isinstance(data, dict):
                 # 尝试常见的键名
                 for key in ["value", "txt", "data", "content", "text"]:
                     if key in data and data[key]:
                         return str(data[key])
-                
+
                 # 如果字典有值，尝试第一个值
                 if data:
                     first_value = list(data.values())[0]
                     if first_value:
                         return str(first_value)
-        
+
         # 检查其他可能的字段
         for field in ["content", "txt", "text", "record_value"]:
             if field in record and record[field]:
                 return str(record[field])
-        
+
         # 最后尝试整个记录转换为字符串
         logger.warning(f"无法从记录中提取TXT值，记录: {record}")
         return ""
@@ -299,9 +307,9 @@ class _AliCloudESAHelper:
         # 移除可能的_acme-challenge前缀
         if domain.startswith("_acme-challenge."):
             domain = domain[16:]  # 移除 "_acme-challenge." 前缀
-        
+
         # 简单的根域名提取逻辑
-        parts = domain.split('.')
+        parts = domain.split(".")
         if len(parts) >= 2:
-            return '.'.join(parts[-2:])
+            return ".".join(parts[-2:])
         return domain

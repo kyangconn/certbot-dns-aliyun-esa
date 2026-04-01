@@ -32,16 +32,9 @@ pip install -e .
 创建凭证文件 ~/.certbot/aliyun-esa-credentials.ini：
 
 ```INI
-# 阿里云ESA API凭证文件
-
-# 阿里云AccessKey ID
-access_key_id = YOUR_ACCESS_KEY_ID
-
-# 阿里云AccessKey Secret
-access_key_secret = YOUR_ACCESS_KEY_SECRET
-
-# 阿里云地域ID（可选，默认为cn-shenzhen）
-region_id = cn-shenzhen
+dns_aliyun_esa_access_id=your_access_key_id
+dns_aliyun_esa_access_secret=your_access_key_secret
+dns_aliyun_esa_site_id=your_site_id
 ```
 
 确保文件权限安全：
@@ -68,13 +61,6 @@ certbot certonly \
   --dns-aliyun-esa-credentials ~/.certbot/aliyun-esa-credentials.ini \
   -d example.com \
   -d *.example.com
-
-# 手动指定站点ID
-certbot certonly \
-  --authenticator dns-aliyun-esa \
-  --dns-aliyun-esa-credentials ~/.certbot/aliyun-esa-credentials.ini \
-  --dns-aliyun-esa-site-id your-site-id \
-  -d example.com
 ```
 
 ## 参数说明
