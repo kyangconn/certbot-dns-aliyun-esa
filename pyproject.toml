@@ -1,0 +1,12 @@
+[project]
+name = "certbot-dns-aliyun-esa"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "alibabacloud-esa20240910>=2.38.0",
+    "certbot>=5.4.0",
+    "zope.interface>=6.0",
+    "setuptools>=65.5.0"
+]
