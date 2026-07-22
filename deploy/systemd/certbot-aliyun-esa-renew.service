@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew Certbot certificates using Aliyun ESA DNS
+Documentation=https://github.com/kyangconn/certbot-dns-aliyun-esa
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/certbot-dns-aliyun-esa
+ExecStart=/opt/certbot-dns-aliyun-esa/.venv/bin/certbot renew --quiet

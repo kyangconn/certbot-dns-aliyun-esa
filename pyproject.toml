@@ -1,20 +1,47 @@
 [build-system]
-requires = ["setuptools>=64.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 
 [project]
 name = "certbot-dns-aliyun-esa"
 version = "0.1.0"
-description = "Add your description here"
+description = "Certbot DNS-01 authenticator for Aliyun ESA"
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Kangyang Ji", email = "kyangconn@outlook.com" },
+]
+keywords = ["aliyun", "certbot", "dns-01", "esa", "letsencrypt"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Plugins",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Security",
+    "Topic :: System :: Systems Administration",
+]
 dependencies = [
     "alibabacloud-esa20240910>=2.38.0",
+    "alibabacloud-tea-openapi>=0.4.5",
+    "alibabacloud-tea-util>=0.3.14",
     "certbot>=5.4.0",
     "zope.interface>=6.0",
-    "setuptools>=65.5.0"
 ]
+
+[project.urls]
+Homepage = "https://github.com/kyangconn/certbot-dns-aliyun-esa"
+Issues = "https://github.com/kyangconn/certbot-dns-aliyun-esa/issues"
+Source = "https://github.com/kyangconn/certbot-dns-aliyun-esa"
 
 
 [project.entry-points."certbot.plugins"]
@@ -24,3 +51,18 @@ dns-aliyun-esa = "certbot_dns_aliyun_esa:Authenticator"
 [tool.setuptools]
 packages = ["certbot_dns_aliyun_esa"]
 include-package-data = true
+
+[dependency-groups]
+dev = [
+    "pip-audit>=2.10.1",
+    "pytest>=9.1.1",
+    "ruff>=0.15.22",
+    "twine>=6.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
