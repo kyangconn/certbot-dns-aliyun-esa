@@ -104,6 +104,32 @@ def test_find_site_tries_longest_exact_domain_suffix_first() -> None:
     assert all(item[1] == "exact" for item in queried)
 
 
+def test_get_site_maps_sdk_response() -> None:
+    class SDK:
+        def __init__(self) -> None:
+            self.request = None
+
+        def get_site_with_options(self, request, runtime):
+            self.request = request
+            return SimpleNamespace(
+                body=SimpleNamespace(site_model=_site(42, "example.com"))
+            )
+
+    sdk = SDK()
+    client = _client_with_sdk(sdk)
+
+    site = client.get_site(42)
+
+    assert sdk.request.site_id == 42
+    assert site == {
+        "site_id": 42,
+        "site_name": "example.com",
+        "status": "active",
+        "coverage": "global",
+        "access_type": "NS",
+    }
+
+
 def test_create_and_delete_record_build_expected_sdk_requests() -> None:
     class SDK:
         def __init__(self) -> None:

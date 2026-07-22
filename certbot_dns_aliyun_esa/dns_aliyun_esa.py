@@ -51,7 +51,8 @@ class Authenticator(dns_common.DNSAuthenticator):
         """Return additional plugin information for ``certbot plugins``."""
         return (
             "This plugin creates and removes DNS-01 TXT records through the "
-            "Aliyun ESA API. It requires an AccessKey ID and AccessKey Secret."
+            "Aliyun ESA API for NS-access sites. It requires an AccessKey ID "
+            "and AccessKey Secret."
         )
 
     def _setup_credentials(self) -> None:
@@ -197,6 +198,7 @@ class _AliCloudESAHelper:
                     raise errors.PluginError(
                         f"ESA site ID {self.site_id} could not be verified: {exc}"
                     ) from exc
+                self._validate_site_access(site)
                 self._verified_site_id = int(site["site_id"])
             return self._verified_site_id
 
@@ -214,12 +216,24 @@ class _AliCloudESAHelper:
                 "or pass --dns-aliyun-esa-site-id."
             )
 
+        self._validate_site_access(site)
         discovered_site_id = int(site["site_id"])
         self._discovered_site_ids[domain_key] = discovered_site_id
         logger.info(
             "Using ESA site %s (ID: %s)", site["site_name"], discovered_site_id
         )
         return discovered_site_id
+
+    @staticmethod
+    def _validate_site_access(site: dict[str, Any]) -> None:
+        """Reject ESA CNAME-access sites, which cannot create TXT records."""
+        access_type = str(site.get("access_type") or "").strip().upper()
+        if access_type and access_type != "NS":
+            site_name = site.get("site_name") or site.get("site_id") or "unknown"
+            raise errors.PluginError(
+                f"ESA site {site_name!r} uses {access_type} access. DNS-01 TXT "
+                "records require an NS-access ESA site."
+            )
 
     def add_txt_record(
         self, domain: str, record_name: str, record_content: str

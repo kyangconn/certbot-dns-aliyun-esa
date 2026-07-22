@@ -118,14 +118,23 @@ class FakeRecordClient:
         self.created: list[tuple[int, str, str, int]] = []
         self.deleted: list[int] = []
         self.records: list[dict] = []
+        self.site_access_type = "NS"
 
     def find_site_by_domain(self, domain: str) -> dict:
         self.find_domains.append(domain)
         site_id = 43 if domain.endswith("other.example") else 42
-        return {"site_id": site_id, "site_name": domain}
+        return {
+            "site_id": site_id,
+            "site_name": domain,
+            "access_type": self.site_access_type,
+        }
 
     def get_site(self, site_id: int) -> dict:
-        return {"site_id": site_id, "site_name": "example.co.uk"}
+        return {
+            "site_id": site_id,
+            "site_name": "example.co.uk",
+            "access_type": self.site_access_type,
+        }
 
     def get_site_records(
         self, site_id: int, record_name: str, record_type: str
@@ -167,6 +176,19 @@ def test_helper_discovers_site_from_certificate_domain(monkeypatch) -> None:
     assert client.created == [
         (42, "_acme-challenge.www.example.co.uk", "value", 600)
     ]
+
+
+@pytest.mark.parametrize("site_id", [None, 42])
+def test_helper_rejects_cname_access_sites(monkeypatch, site_id: int | None) -> None:
+    helper, client = _helper(monkeypatch, site_id=site_id)
+    client.site_access_type = "CNAME"
+
+    with pytest.raises(errors.PluginError, match="require an NS-access ESA site"):
+        helper.add_txt_record(
+            "example.com", "_acme-challenge.example.com", "value"
+        )
+
+    assert client.created == []
 
 
 def test_record_cache_distinguishes_parallel_challenge_values(monkeypatch) -> None:
@@ -217,3 +239,37 @@ def test_cleanup_fallback_deletes_only_matching_value(monkeypatch) -> None:
     helper.del_txt_record("example.com", "_acme-challenge.example.com", "target")
 
     assert client.deleted == [11]
+
+
+def test_add_failure_is_reported_as_plugin_error(monkeypatch) -> None:
+    helper, client = _helper(monkeypatch, site_id=42)
+
+    def fail_to_create(*_args, **_kwargs):
+        raise RuntimeError("API unavailable")
+
+    client.add_txt_record = fail_to_create
+
+    with pytest.raises(errors.PluginError, match="API unavailable"):
+        helper.add_txt_record(
+            "example.com", "_acme-challenge.example.com", "value"
+        )
+
+
+def test_cleanup_failure_does_not_mask_certificate_issuance(
+    monkeypatch, caplog
+) -> None:
+    helper, client = _helper(monkeypatch, site_id=42)
+    helper.add_txt_record(
+        "example.com", "_acme-challenge.example.com", "value"
+    )
+
+    def fail_to_delete(_record_id: int) -> None:
+        raise RuntimeError("API unavailable")
+
+    client.delete_record = fail_to_delete
+
+    helper.del_txt_record(
+        "example.com", "_acme-challenge.example.com", "value"
+    )
+
+    assert "Could not clean up ESA TXT record" in caplog.text
