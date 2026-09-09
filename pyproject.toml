@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=83.0.0", "wheel"]
+requires = ["setuptools>=84.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 
@@ -31,11 +31,11 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
-    "alibabacloud-esa20240910>=2.38.0",
-    "alibabacloud-tea-openapi>=0.4.5",
+    "alibabacloud-esa20240910>=3.15.1",
+    "alibabacloud-tea-openapi>=0.4.6",
     "alibabacloud-tea-util>=0.3.14",
-    "certbot>=5.4.0",
-    "zope.interface>=6.0",
+    "certbot>=5.8.0",
+    "zope.interface>=8.6",
 ]
 
 [project.urls]
@@ -56,8 +56,8 @@ include-package-data = true
 dev = [
     "pip-audit>=2.10.1",
     "pytest>=9.1.1",
-    "ruff>=0.15.22",
-    "twine>=6.2.0",
+    "ruff>=0.16.6",
+    "twine>=7.0.0",
 ]
 
 [tool.pytest.ini_options]
