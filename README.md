@@ -2,19 +2,11 @@
 
 这是一个 Certbot 插件，用于通过阿里云 ESA（Edge Security Acceleration）API 自动完成 DNS-01 验证。
 
-## 功能
-
-- 通过阿里云 ESA API 自动添加和删除 TXT 记录
-- 支持按证书域名自动查找 ESA 站点
-- 支持通过命令行或凭证文件手动指定站点 ID
-- 支持同一证书包含多个 ESA 站点及并行 DNS-01 challenge
-- 完整的错误处理和日志记录
+> ESA 的 CNAME 接入站点不允许创建 TXT 记录，因此本插件只适用于 **NS 接入**的 ESA 站点。
 
 ## 安装
 
-### 从源码安装
-
-本仓库目前不发布 PyPI 包，推荐使用 uv 从源码创建独立环境：
+本仓库不发布 PyPI 包，推荐使用 uv 从源码创建独立环境：
 
 ```bash
 git clone https://github.com/kyangconn/certbot-dns-aliyun-esa.git
@@ -23,24 +15,20 @@ uv sync --locked --no-dev
 uv run --locked --no-dev certbot plugins
 ```
 
-最后一个命令的输出中应出现 `dns-aliyun-esa`。生产服务器的安装和自动续期方式见下文“自部署”一节。
+最后一个命令的输出中应出现 `dns-aliyun-esa`。
 
 ## 依赖
 
 - Python 3.10+
-- Certbot 5.4.0+
-- alibabacloud-esa20240910 2.38.0+
+- Certbot 5.8.0+
+- alibabacloud-esa20240910 3.15.1+
 - uv
 
 依赖版本由 `uv.lock` 锁定，运行环境不会与系统 Python 或系统安装的 Certbot 混用。
 
-> ESA 的 CNAME 接入站点不允许创建 TXT 记录，因此本插件只适用于 **NS 接入**的 ESA 站点。
-
 ## 配置
 
 ### 1. 创建凭证文件
-
-复制示例文件并编辑：
 
 ```bash
 mkdir -p ~/.certbot
@@ -58,22 +46,18 @@ dns_aliyun_esa_access_key_secret = your_access_key_secret
 # dns_aliyun_esa_site_id = your_site_id
 ```
 
-早期 README 使用过 `dns_aliyun_esa_access_id` 和 `dns_aliyun_esa_access_secret`。插件仍兼容这两个旧字段，新配置建议使用上面的规范字段。
+早期版本使用过 `dns_aliyun_esa_access_id` 和 `dns_aliyun_esa_access_secret`，插件仍兼容这两个旧字段。
 
 ### 2. 获取阿里云 AccessKey
 
 1. 登录阿里云控制台。
 2. 进入“访问控制”并创建或选择专用 RAM 用户。
 3. 创建 AccessKey 并保存 ID 和 Secret。
-4. 为 RAM 用户授予 ESA 站点查询和 DNS 记录操作权限。
-
-插件只需要 `esa:ListSites`、`esa:GetSite`、`esa:ListRecords`、
-`esa:CreateRecord` 和 `esa:DeleteRecord`。建议按这五项操作配置自定义策略，
-不要长期使用 `AliyunESAFullAccess`。
+4. 为 RAM 用户授予 `esa:ListSites`、`esa:GetSite`、`esa:ListRecords`、
+   `esa:CreateRecord` 和 `esa:DeleteRecord`。建议按这五项操作配置自定义策略，
+   不要长期使用 `AliyunESAFullAccess`。
 
 ## 使用方法
-
-### 基本用法
 
 首次测试建议增加 `--test-cert`，确认成功后再申请生产证书：
 
@@ -94,17 +78,16 @@ uv run --locked --no-dev certbot certonly \
 - `--dns-aliyun-esa-ttl`：临时 TXT 记录 TTL，可选，默认 `600`；可设置为 `1` 或 `30`–`86400`。
 - `--dns-aliyun-esa-propagation-seconds`：DNS 传播等待时间，可选，默认 `30` 秒。
 
-### 自动续期
-
-Certbot 会在首次签发后保存插件参数。可以先检查续期配置：
+Certbot 会在首次签发后保存插件参数，之后可以直接检查续期：
 
 ```bash
 uv run --locked --no-dev certbot renew --dry-run
 ```
 
-### 自部署
+## 自部署
 
-下面是一种简单的 Linux 部署方式：把仓库和虚拟环境放在 `/opt/certbot-dns-aliyun-esa`，凭证放在 `/etc/letsencrypt`。先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，然后执行：
+下面是一种简单的 Linux 部署方式：把仓库和虚拟环境放在 `/opt/certbot-dns-aliyun-esa`，
+凭证放在 `/etc/letsencrypt`。先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)：
 
 ```bash
 sudo git clone https://github.com/kyangconn/certbot-dns-aliyun-esa.git \
@@ -137,7 +120,7 @@ sudo .venv/bin/certbot certonly \
 sudo .venv/bin/certbot renew --dry-run
 ```
 
-仓库提供了每天运行两次的 systemd 定时器。确认 dry-run 成功后安装：
+仓库提供了每天运行两次的 systemd 定时器，确认 dry-run 成功后安装：
 
 ```bash
 sudo install -m 644 deploy/systemd/certbot-aliyun-esa-renew.service \
@@ -161,39 +144,22 @@ sudo .venv/bin/certbot renew --dry-run
 ## 工作原理
 
 1. Certbot 调用插件开始 DNS-01 验证。
-2. 插件根据域名查找 ESA 站点，或使用手动指定的站点 ID。
-3. 插件通过阿里云 ESA API 添加 TXT 记录。
+2. 插件根据域名查找 ESA 站点（先试完整域名，再逐级尝试上级域名），或使用手动指定的站点 ID。
+3. 插件通过阿里云 ESA API 添加 TXT 记录；如果相同记录已存在则直接复用，不会重复创建。
 4. Certbot 等待 DNS 传播并请求 Let's Encrypt 验证。
-5. 插件清理本次创建的 TXT 记录。
+5. 插件清理本次创建的 TXT 记录；本就不属于本次验证的记录会被保留。
 6. Certbot 颁发证书。
 
 ## 故障排除
 
-### 权限不足
-
-- 确认 AccessKey 属于正确的阿里云账号。
-- 确认 RAM 策略包含前面列出的 ESA API 操作。
-
-### 找不到站点
-
-- 确认域名已经在 ESA 中以 NS 方式接入；CNAME 接入站点不能创建 DNS-01 所需的 TXT 记录。
-- 尝试通过 `--dns-aliyun-esa-site-id` 手动指定站点。
-
-### DNS 验证超时
-
-- 增大 `--dns-aliyun-esa-propagation-seconds`。
-- 使用公共 DNS 解析器检查 `_acme-challenge` TXT 记录是否已生效。
-
-### 查看日志
-
-```bash
-uv run --locked --no-dev certbot certonly ... -vv
-tail -f /var/log/letsencrypt/letsencrypt.log
-```
+- **权限不足**：确认 AccessKey 属于正确的阿里云账号，并且 RAM 策略包含前面列出的 ESA 操作。
+- **找不到站点**：确认域名已在 ESA 中以 NS 方式接入，或通过 `--dns-aliyun-esa-site-id` 手动指定。
+- **DNS 验证超时**：增大 `--dns-aliyun-esa-propagation-seconds`，并用公共 DNS 解析器检查
+  `_acme-challenge` TXT 记录是否已生效。
+- **查看日志**：`uv run --locked --no-dev certbot certonly ... -vv`，或
+  `tail -f /var/log/letsencrypt/letsencrypt.log`。
 
 ## 开发
-
-### 项目结构
 
 ```text
 certbot-dns-aliyun-esa/
@@ -204,28 +170,23 @@ certbot-dns-aliyun-esa/
 └── uv.lock                  # 锁定依赖
 ```
 
-### 本地检查
+本地检查：
 
 ```bash
 uv sync --locked
 uv run --locked ruff check .
+uv run --locked ruff format --check .
 uv run --locked pytest -q
 uv run --locked pip-audit --local
 uv build --no-sources
 uv run --locked twine check dist/*
 ```
 
-单元测试使用模拟 ESA 客户端，不会读取真实 AccessKey 或修改线上 DNS。GitHub Actions 会在 Python 3.10–3.14 上运行测试，并检查构建产物和依赖漏洞。
-
-## 同名项目
-
-[lampofaladdin/certbot-dns-aliyun-esa](https://github.com/lampofaladdin/certbot-dns-aliyun-esa) 是一个独立重写的同名实现，项目结构和自动化测试做得更完整，采用 Apache-2.0 许可证，也已经发布到 [PyPI](https://pypi.org/project/certbot-dns-aliyun-esa/)。如果你需要直接通过 `pip` 安装，建议优先评估该项目。
-
-该项目还向 Nginx Proxy Manager（NPM）提交了 [Aliyun ESA DNS provider PR #5639](https://github.com/NginxProxyManager/nginx-proxy-manager/pull/5639)。该 PR 目前仍在等待社区验证和供应链安全审查，尚未合入 NPM 正式版本。
+单元测试使用模拟 ESA 客户端，不会读取真实 AccessKey 或修改线上 DNS。
+GitHub Actions 会在 Python 3.10–3.14 上运行测试，并检查构建产物和依赖漏洞。
 
 ## 支持
 
-- [阿里云 ESA SDK 参考](https://help.aliyun.com/zh/edge-security-acceleration/esa/esa-sdk-reference?spm=5176.29099518.console-base_help.dexternal.5e8b4a9bOXtFzJ)
 - [阿里云 ESA API 概览](https://help.aliyun.com/zh/edge-security-acceleration/esa/api-reference-1-1/)
 - [Certbot 文档](https://eff-certbot.readthedocs.io/en/stable/)
 - [问题反馈](https://github.com/kyangconn/certbot-dns-aliyun-esa/issues)

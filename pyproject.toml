@@ -31,11 +31,11 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
-    "alibabacloud-esa20240910>=2.38.0",
-    "alibabacloud-tea-openapi>=0.4.5",
-    "alibabacloud-tea-util>=0.3.14",
-    "certbot>=5.4.0",
-    "zope.interface>=6.0",
+    "alibabacloud-esa20240910>=3.15.1",
+    "alibabacloud-tea-openapi>=0.4.6",
+    "certbot>=5.8.0",
+    "darabonba-core>=1.0.9",
+    "zope.interface>=8.6",
 ]
 
 [project.urls]

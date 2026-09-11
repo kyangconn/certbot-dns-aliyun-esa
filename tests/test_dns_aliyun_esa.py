@@ -38,20 +38,18 @@ def test_credentials_accept_canonical_and_legacy_names(
 ) -> None:
     credentials_file = _credentials_file(
         tmp_path,
-        f"dns_aliyun_esa_{id_key} = id\n"
-        f"dns_aliyun_esa_{secret_key} = secret\n",
+        f"dns_aliyun_esa_{id_key} = id\ndns_aliyun_esa_{secret_key} = secret\n",
     )
     authenticator = Authenticator(_config(credentials_file), "dns-aliyun-esa")
 
     authenticator._setup_credentials()
 
     assert authenticator.credentials is not None
-    assert Authenticator._credential_value(
-        authenticator.credentials, "access_key_id", "access_id"
-    ) == "id"
-    assert Authenticator._credential_value(
-        authenticator.credentials, "access_key_secret", "access_secret"
-    ) == "secret"
+    assert Authenticator._credential(authenticator.credentials, "access_key_id") == "id"
+    assert (
+        Authenticator._credential(authenticator.credentials, "access_key_secret")
+        == "secret"
+    )
 
 
 def test_credentials_require_both_access_key_values(tmp_path) -> None:
@@ -61,6 +59,19 @@ def test_credentials_require_both_access_key_values(tmp_path) -> None:
     authenticator = Authenticator(_config(credentials_file), "dns-aliyun-esa")
 
     with pytest.raises(errors.PluginError, match="access_key_secret"):
+        authenticator._setup_credentials()
+
+
+def test_invalid_site_id_in_credentials_is_rejected(tmp_path) -> None:
+    credentials_file = _credentials_file(
+        tmp_path,
+        "dns_aliyun_esa_access_key_id = id\n"
+        "dns_aliyun_esa_access_key_secret = secret\n"
+        "dns_aliyun_esa_site_id = not-a-number\n",
+    )
+    authenticator = Authenticator(_config(credentials_file), "dns-aliyun-esa")
+
+    with pytest.raises(errors.PluginError, match="Invalid ESA site ID"):
         authenticator._setup_credentials()
 
 
@@ -112,11 +123,36 @@ def test_invalid_numeric_options_fail_before_api_use(
         authenticator._get_esa_helper()
 
 
+def test_helper_requires_credentials_before_use(tmp_path) -> None:
+    credentials_file = _credentials_file(
+        tmp_path, "dns_aliyun_esa_access_key_id = id\n"
+    )
+    authenticator = Authenticator(_config(credentials_file), "dns-aliyun-esa")
+
+    with pytest.raises(errors.PluginError, match="have not been configured"):
+        authenticator._get_esa_helper()
+
+
+def test_configured_credentials_site_id_is_used(tmp_path, monkeypatch) -> None:
+    credentials_file = _credentials_file(
+        tmp_path,
+        "dns_aliyun_esa_access_key_id = id\n"
+        "dns_aliyun_esa_access_key_secret = secret\n"
+        "dns_aliyun_esa_site_id = 111\n",
+    )
+    monkeypatch.setattr(dns_aliyun_esa, "AliCloudESAClient", lambda *_: None)
+    authenticator = Authenticator(_config(credentials_file), "dns-aliyun-esa")
+    authenticator._setup_credentials()
+
+    assert authenticator._get_esa_helper().site_id == 111
+
+
 class FakeRecordClient:
     def __init__(self) -> None:
         self.find_domains: list[str] = []
         self.created: list[tuple[int, str, str, int]] = []
         self.deleted: list[int] = []
+        self.list_calls: list[str] = []
         self.records: list[dict] = []
         self.site_access_type = "NS"
 
@@ -132,22 +168,16 @@ class FakeRecordClient:
     def get_site(self, site_id: int) -> dict:
         return {
             "site_id": site_id,
-            "site_name": "example.co.uk",
+            "site_name": "example.com",
             "access_type": self.site_access_type,
         }
 
-    def get_site_records(
-        self, site_id: int, record_name: str, record_type: str
-    ) -> list[dict]:
+    def list_records(self, site_id: int, record_name: str) -> list[dict]:
+        self.list_calls.append(record_name)
         return list(self.records)
 
-    def add_txt_record(
-        self,
-        site_id: int,
-        record_name: str,
-        value: str,
-        ttl: int,
-        comment: str,
+    def create_txt_record(
+        self, site_id: int, record_name: str, value: str, ttl: int
     ) -> int:
         record_id = len(self.created) + 1
         self.created.append((site_id, record_name, value, ttl))
@@ -157,7 +187,9 @@ class FakeRecordClient:
         self.deleted.append(record_id)
 
 
-def _helper(monkeypatch, *, site_id: int | None = None) -> tuple[_AliCloudESAHelper, FakeRecordClient]:
+def _helper(
+    monkeypatch, *, site_id: int | None = None
+) -> tuple[_AliCloudESAHelper, FakeRecordClient]:
     fake_client = FakeRecordClient()
     monkeypatch.setattr(
         dns_aliyun_esa, "AliCloudESAClient", lambda _key_id, _secret: fake_client
@@ -173,9 +205,16 @@ def test_helper_discovers_site_from_certificate_domain(monkeypatch) -> None:
     )
 
     assert client.find_domains == ["www.example.co.uk"]
-    assert client.created == [
-        (42, "_acme-challenge.www.example.co.uk", "value", 600)
-    ]
+    assert client.created == [(42, "_acme-challenge.www.example.co.uk", "value", 600)]
+
+
+def test_site_lookup_is_cached_across_challenges(monkeypatch) -> None:
+    helper, client = _helper(monkeypatch)
+
+    helper.add_txt_record("example.com", "_acme-challenge.example.com", "one")
+    helper.add_txt_record("example.com", "_acme-challenge.example.com", "two")
+
+    assert client.find_domains == ["example.com"]
 
 
 @pytest.mark.parametrize("site_id", [None, 42])
@@ -184,11 +223,18 @@ def test_helper_rejects_cname_access_sites(monkeypatch, site_id: int | None) -> 
     client.site_access_type = "CNAME"
 
     with pytest.raises(errors.PluginError, match="require an NS-access ESA site"):
-        helper.add_txt_record(
-            "example.com", "_acme-challenge.example.com", "value"
-        )
+        helper.add_txt_record("example.com", "_acme-challenge.example.com", "value")
 
     assert client.created == []
+
+
+def test_explicit_site_id_skips_discovery(monkeypatch) -> None:
+    helper, client = _helper(monkeypatch, site_id=42)
+
+    helper.add_txt_record("example.com", "_acme-challenge.example.com", "value")
+
+    assert client.find_domains == []
+    assert client.created == [(42, "_acme-challenge.example.com", "value", 600)]
 
 
 def test_record_cache_distinguishes_parallel_challenge_values(monkeypatch) -> None:
@@ -207,9 +253,7 @@ def test_auto_discovery_keeps_separate_site_ids_for_multiple_domains(
 ) -> None:
     helper, client = _helper(monkeypatch)
 
-    helper.add_txt_record(
-        "one.example", "_acme-challenge.one.example", "first"
-    )
+    helper.add_txt_record("one.example", "_acme-challenge.one.example", "first")
     helper.add_txt_record(
         "two.other.example", "_acme-challenge.two.other.example", "second"
     )
@@ -220,7 +264,7 @@ def test_auto_discovery_keeps_separate_site_ids_for_multiple_domains(
 
 def test_cleanup_does_not_delete_a_preexisting_matching_record(monkeypatch) -> None:
     helper, client = _helper(monkeypatch, site_id=42)
-    client.records = [{"record_id": 99, "data": {"value": "existing"}}]
+    client.records = [{"record_id": 99, "data": SimpleNamespace(value="existing")}]
 
     helper.add_txt_record("example.com", "_acme-challenge.example.com", "existing")
     helper.del_txt_record("example.com", "_acme-challenge.example.com", "existing")
@@ -232,7 +276,7 @@ def test_cleanup_does_not_delete_a_preexisting_matching_record(monkeypatch) -> N
 def test_cleanup_fallback_deletes_only_matching_value(monkeypatch) -> None:
     helper, client = _helper(monkeypatch, site_id=42)
     client.records = [
-        {"record_id": 10, "data": {"value": "other"}},
+        {"record_id": 10, "data": SimpleNamespace(value="other")},
         {"record_id": 11, "data": SimpleNamespace(value="target")},
     ]
 
@@ -241,35 +285,48 @@ def test_cleanup_fallback_deletes_only_matching_value(monkeypatch) -> None:
     assert client.deleted == [11]
 
 
+def test_cleanup_without_a_matching_record_only_warns(monkeypatch, caplog) -> None:
+    helper, _client = _helper(monkeypatch, site_id=42)
+
+    helper.del_txt_record("example.com", "_acme-challenge.example.com", "target")
+
+    assert "No ESA TXT record matched" in caplog.text
+
+
 def test_add_failure_is_reported_as_plugin_error(monkeypatch) -> None:
     helper, client = _helper(monkeypatch, site_id=42)
 
     def fail_to_create(*_args, **_kwargs):
         raise RuntimeError("API unavailable")
 
-    client.add_txt_record = fail_to_create
+    client.create_txt_record = fail_to_create
 
     with pytest.raises(errors.PluginError, match="API unavailable"):
-        helper.add_txt_record(
-            "example.com", "_acme-challenge.example.com", "value"
-        )
+        helper.add_txt_record("example.com", "_acme-challenge.example.com", "value")
 
 
 def test_cleanup_failure_does_not_mask_certificate_issuance(
     monkeypatch, caplog
 ) -> None:
     helper, client = _helper(monkeypatch, site_id=42)
-    helper.add_txt_record(
-        "example.com", "_acme-challenge.example.com", "value"
-    )
+    helper.add_txt_record("example.com", "_acme-challenge.example.com", "value")
 
     def fail_to_delete(_record_id: int) -> None:
         raise RuntimeError("API unavailable")
 
     client.delete_record = fail_to_delete
 
-    helper.del_txt_record(
-        "example.com", "_acme-challenge.example.com", "value"
-    )
+    helper.del_txt_record("example.com", "_acme-challenge.example.com", "value")
 
     assert "Could not clean up ESA TXT record" in caplog.text
+
+
+def test_cleanup_reuses_the_cached_record_id(monkeypatch) -> None:
+    helper, client = _helper(monkeypatch, site_id=42)
+
+    helper.add_txt_record("example.com", "_acme-challenge.example.com", "value")
+    helper.del_txt_record("example.com", "_acme-challenge.example.com", "value")
+
+    # One lookup while adding, none while deleting: cleanup reuses the known ID.
+    assert client.list_calls == ["_acme-challenge.example.com"]
+    assert client.deleted == [1]
